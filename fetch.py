@@ -1,50 +1,66 @@
-import os
 import requests
-from sqlalchemy import create_engine, text
+import pandas as pd
+import os
+import schedule
+import time
+from datetime import datetime
+from sqlalchemy import create_engine
 
-# 1️⃣ جلب رابط قاعدة البيانات من متغير البيئة
-DB_URL = os.getenv("DATABASE_URL")
+# ----------------------------
+# متغيرات البيئة (من Railway)
+# ----------------------------
+API_TOKEN = os.getenv("AQI_TOKEN")
+DB_URL = os.getenv("DATABASE_URL")  # PostgreSQL من Railway
+
+CITY = "beijing"
+
+if not API_TOKEN:
+    raise ValueError("❌ API Token غير موجود. ضع AQI_TOKEN في متغيرات Railway.")
+
 if not DB_URL:
-    raise ValueError("❌ قاعدة البيانات غير معرفة. تأكد من وضع DATABASE_URL في Railway.")
+    raise ValueError("❌ قاعدة البيانات غير معرفة. ضع DATABASE_URL من Postgres Plugin في متغيرات Railway.")
 
-# 2️⃣ إنشاء اتصال بقاعدة البيانات
+# ----------------------------
+# إنشاء اتصال مع PostgreSQL
+# ----------------------------
 engine = create_engine(DB_URL)
 
-# 3️⃣ إنشاء الجدول لو مش موجود
-with engine.connect() as conn:
-    conn.execute(text("""
-        CREATE TABLE IF NOT EXISTS air_quality (
-            id SERIAL PRIMARY KEY,
-            city TEXT,
-            aqi INTEGER,
-            pm25 REAL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """))
-    conn.commit()
+def fetch_data():
+    print(f"[{datetime.now()}] Fetching AQI data for {CITY}...")
 
-print("✅ تم التأكد من وجود الجدول air_quality.")
-
-# 4️⃣ جلب بيانات (مثال API وهمي للشرح)
-url = "https://api.openaq.org/v2/latest?city=Algiers"  # استبدل API برابطك
-response = requests.get(url)
-
-if response.status_code == 200:
+    url = f"https://api.waqi.info/feed/{CITY}/?token={API_TOKEN}"
+    response = requests.get(url)
     data = response.json()
-    
-    # استخراج بيانات بشكل مبسط
-    city = data["results"][0]["city"]
-    aqi = 75   # هذا مجرد مثال، غيّره حسب ال API
-    pm25 = data["results"][0]["measurements"][0]["value"]
 
-    # 5️⃣ إدخال البيانات داخل الجدول
-    with engine.connect() as conn:
-        conn.execute(text("""
-            INSERT INTO air_quality (city, aqi, pm25)
-            VALUES (:city, :aqi, :pm25)
-        """), {"city": city, "aqi": aqi, "pm25": pm25})
-        conn.commit()
+    if data.get("status") != "ok":
+        print("⚠️ Error fetching data:", data)
+        return
 
-    print(f"✅ تم إدخال البيانات: {city}, AQI={aqi}, PM2.5={pm25}")
-else:
-    print("❌ فشل في جلب البيانات من API")
+    iaqi = data["data"]["iaqi"]
+
+    record = {
+        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "aqi": data["data"].get("aqi"),
+        **{k: v["v"] for k, v in iaqi.items()}
+    }
+
+    # تحويل إلى DataFrame
+    df = pd.DataFrame([record])
+
+    # حفظ في PostgreSQL
+    df.to_sql("air_quality", engine, if_exists="append", index=False)
+    print("✅ Data saved to PostgreSQL")
+
+# ----------------------------
+# جدولة التشغيل
+# ----------------------------
+schedule.every(1).hours.do(fetch_data)
+
+print("🚀 Service started... Collecting AQI data every hour.")
+
+# ----------------------------
+# حلقة تشغيل مستمرة
+# ----------------------------
+while True:
+    schedule.run_pending()
+    time.sleep(60)
