@@ -4,9 +4,16 @@ import os
 import schedule
 import time
 from datetime import datetime
+from sqlalchemy import create_engine
 
-API_TOKEN = os.getenv("AQI_TOKEN")  # التوكن من متغير البيئة
+# متغيرات البيئة
+API_TOKEN = os.getenv("AQI_TOKEN")
+DB_URL = os.getenv("DATABASE_URL")  # من Railway (Postgres)
+
 CITY = "beijing"
+
+# إنشاء اتصال مع PostgreSQL
+engine = create_engine(DB_URL)
 
 def fetch_data():
     print(f"[{datetime.now()}] Fetching AQI data for {CITY}...")
@@ -25,25 +32,18 @@ def fetch_data():
         **{k: v["v"] for k, v in iaqi.items()}
     }
 
-    # حفظ في CSV
-    os.makedirs("data", exist_ok=True)
-    file_path = "data/air_quality.csv"
+    # تحويل إلى DataFrame
+    df = pd.DataFrame([record])
 
-    if os.path.exists(file_path):
-        df = pd.read_csv(file_path)
-        df = pd.concat([df, pd.DataFrame([record])], ignore_index=True)
-    else:
-        df = pd.DataFrame([record])
-
-    df.to_csv(file_path, index=False)
-    print(f"✅ Data saved to {file_path}")
+    # حفظ في PostgreSQL
+    df.to_sql("air_quality", engine, if_exists="append", index=False)
+    print("✅ Data saved to PostgreSQL")
 
 # تشغيل كل ساعة
 schedule.every(1).hours.do(fetch_data)
 
 print("🚀 Service started... Collecting AQI data every hour.")
 
-# حلقة مستمرة حتى يوقفها Railway (service يعمل 24/7)
 while True:
     schedule.run_pending()
     time.sleep(60)
