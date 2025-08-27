@@ -1,36 +1,49 @@
 import requests
 import pandas as pd
 import os
+import schedule
+import time
 from datetime import datetime
 
-API_TOKEN = os.getenv("AQI_TOKEN")  # نخزن التوكن كمتغير بيئة
+API_TOKEN = os.getenv("AQI_TOKEN")  # التوكن من متغير البيئة
+CITY = "beijing"
 
-cities = ["beijing", "paris", "algiers"]
+def fetch_data():
+    print(f"[{datetime.now()}] Fetching AQI data for {CITY}...")
+    url = f"https://api.waqi.info/feed/{CITY}/?token={API_TOKEN}"
+    response = requests.get(url)
+    data = response.json()
 
-def fetch_city(city):
-    url = f"https://api.waqi.info/feed/{city}/?token={API_TOKEN}"
-    r = requests.get(url).json()
-    if r["status"] == "ok":
-        data = r["data"]
-        record = {
-            "city": city,
-            "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-            "aqi": data.get("aqi"),
-        }
-        for k, v in data["iaqi"].items():
-            record[k] = v.get("v")
-        return record
-    return None
+    if data["status"] != "ok":
+        print("Error fetching data:", data)
+        return
 
-all_data = [fetch_city(c) for c in cities]
-df = pd.DataFrame([d for d in all_data if d])
+    iaqi = data["data"]["iaqi"]
+    record = {
+        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "aqi": data["data"]["aqi"],
+        **{k: v["v"] for k, v in iaqi.items()}
+    }
 
-csv_file = "air_quality.csv"
+    # حفظ في CSV
+    os.makedirs("data", exist_ok=True)
+    file_path = "data/air_quality.csv"
 
-# حفظ البيانات مع append
-if os.path.exists(csv_file):
-    df.to_csv(csv_file, mode="a", header=False, index=False)
-else:
-    df.to_csv(csv_file, index=False)
+    if os.path.exists(file_path):
+        df = pd.read_csv(file_path)
+        df = pd.concat([df, pd.DataFrame([record])], ignore_index=True)
+    else:
+        df = pd.DataFrame([record])
 
-print("Data collected and saved successfully!")
+    df.to_csv(file_path, index=False)
+    print(f"✅ Data saved to {file_path}")
+
+# تشغيل كل ساعة
+schedule.every(1).hours.do(fetch_data)
+
+print("🚀 Service started... Collecting AQI data every hour.")
+
+# حلقة مستمرة حتى يوقفها Railway (service يعمل 24/7)
+while True:
+    schedule.run_pending()
+    time.sleep(60)
